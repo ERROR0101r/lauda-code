@@ -30,35 +30,23 @@ header(){ echo -e "\n${MAGENTA}${BOLD}◈ ─── $1 ─── ◈${NC}\n"; }
 has()   { command -v "$1" >/dev/null 2>&1; }
 
 # ---------- Interactive TTY helpers ----------
-# A controlling terminal is required for prompts, even if stdin is redirected
-# (pipes, /dev/null, Termux widget launchers, etc.). We always read from /dev/tty.
-
 have_tty() { { : </dev/tty; } 2>/dev/null; }
 
-# Sanitize a string: strip CR, LF, tab, space, NUL
 sanitize() {
     local s="$1"
-    s="${s//$'\r'/}"
-    s="${s//$'\n'/}"
-    s="${s//$'\t'/}"
-    s="${s// /}"
-    s="${s//$'\0'/}"
+    s="${s//$'\r'/}"; s="${s//$'\n'/}"; s="${s//$'\t'/}"
+    s="${s// /}";     s="${s//$'\0'/}"
     printf '%s' "$s"
 }
 
-# read_tty VAR "prompt" — reads one line from /dev/tty, sanitized into VAR.
-# Returns 1 on EOF/failure.
 read_tty() {
     local __var="$1" __prompt="$2" __line=""
-    if ! IFS= read -rp "$__prompt" __line </dev/tty; then
-        return 1
-    fi
+    if ! IFS= read -rp "$__prompt" __line </dev/tty; then return 1; fi
     __line=$(sanitize "$__line")
     printf -v "$__var" '%s' "$__line"
     return 0
 }
 
-# pause: wait for Enter without ever breaking the menu loop
 pause() {
     echo
     read_tty _ "↳ Press Enter to return to menu..." || true
@@ -136,12 +124,10 @@ clone_repo() {
         ok "Repository already exists."
         return 0
     fi
-
     if [ -d "$INSTALL_DIR" ]; then
         warn "Directory exists but is not a git repo. Removing..."
         rm -rf "$INSTALL_DIR"
     fi
-
     log "Cloning from GitHub..."
     if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
         ok "Repository cloned successfully."
@@ -175,39 +161,62 @@ clean_unwanted() {
         "Makefile" ".env.example" "*.sample"
         "Screenshot_*.png" "*.jpg" "*.jpeg"
     )
-
     for pat in "${patterns[@]}"; do
         while IFS= read -r -d '' f; do
             if rm -rf "$f" 2>/dev/null; then
-                ok "Removed: $(basename "$f")"
-                cleaned=$((cleaned+1))
+                ok "Removed: $(basename "$f")"; cleaned=$((cleaned+1))
             fi
         done < <(find "$INSTALL_DIR" -maxdepth 2 -name "$pat" -print0 2>/dev/null)
     done
-
     while IFS= read -r -d '' d; do
         rm -rf "$d" 2>/dev/null && ok "Removed cache: $(basename "$d")" && cleaned=$((cleaned+1))
     done < <(find "$INSTALL_DIR" -type d \( -name "__pycache__" -o -name ".pytest_cache" \) -print0 2>/dev/null)
-
-    if [ "$cleaned" -eq 0 ]; then
-        ok "Nothing to clean."
-    else
-        ok "Cleaned $cleaned item(s)."
-    fi
+    if [ "$cleaned" -eq 0 ]; then ok "Nothing to clean."; else ok "Cleaned $cleaned item(s)."; fi
 }
 
-# ---------- Create Shortcuts ----------
+# ---------- Shortcuts (auto, not a menu option) ----------
 create_shortcuts() {
     header "Creating Shortcuts"
 
+    # 1) Terminal command: lauda
     mkdir -p "$BIN_DIR"
     cat > "$BIN_DIR/lauda" <<EOF
 #!/bin/bash
 exec python3 "$LAUDA_PY" "\$@"
 EOF
     chmod +x "$BIN_DIR/lauda"
-    ok "Terminal command: lauda"
+    ok "Terminal command installed: lauda"
 
+    # 2) Ensure ~/.local/bin is on PATH (persist to shell rc files)
+    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+        local export_line='export PATH="$HOME/.local/bin:$PATH"'
+        local added_to=""
+
+        for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+            # create the rc file if it doesn't exist and this shell uses it
+            case "$rc" in
+                "$HOME/.bashrc") [ -f "$rc" ] || [ "$SHELL" = "/bin/bash" ] || [ "$SHELL" = "/usr/bin/bash" ] || continue ;;
+                "$HOME/.zshrc")  [ -f "$rc" ] || [ "$SHELL" = "/bin/zsh" ] || [ "$SHELL" = "/usr/bin/zsh" ] || continue ;;
+                "$HOME/.profile") [ -f "$rc" ] || continue ;;
+            esac
+            if ! grep -qF 'HOME/.local/bin' "$rc" 2>/dev/null; then
+                printf '\n# Added by Lauda Code installer\n%s\n' "$export_line" >> "$rc"
+                added_to="$added_to $(basename "$rc")"
+            fi
+        done
+
+        if [ -n "$added_to" ]; then
+            ok "Added $BIN_DIR to PATH in:$added_to"
+            export PATH="$BIN_DIR:$PATH"
+        else
+            warn "Could not auto-add PATH. Add manually:"
+            echo "  echo '$export_line' >> ~/.bashrc"
+        fi
+    else
+        ok "PATH already includes $BIN_DIR"
+    fi
+
+    # 3) Desktop entry + application menu
     mkdir -p "$APPS_DIR"
     local desktop_file="$APPS_DIR/lauda-code.desktop"
     cat > "$desktop_file" <<EOF
@@ -224,16 +233,12 @@ EOF
     chmod +x "$desktop_file"
     ok "App menu shortcut created."
 
+    # 4) Desktop shortcut (if Desktop dir exists)
     if [ -d "$DESKTOP_DIR" ]; then
         cp "$desktop_file" "$DESKTOP_DIR/lauda-code.desktop"
         chmod +x "$DESKTOP_DIR/lauda-code.desktop"
         gio set "$DESKTOP_DIR/lauda-code.desktop" metadata::trusted true 2>/dev/null || true
         ok "Desktop shortcut created."
-    fi
-
-    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-        warn "Add to PATH (bash/zsh):"
-        echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
     fi
 }
 
@@ -280,7 +285,6 @@ check_updates() {
 do_update() {
     local new_v="$1"
     header "Updating Lauda Code"
-
     log "Pulling latest changes from Git..."
     if git -C "$INSTALL_DIR" pull origin main 2>/dev/null; then
         echo "$new_v" > "$VERSION_FILE"
@@ -290,21 +294,26 @@ do_update() {
     fi
 }
 
-# ---------- Install / Reinstall ----------
+# ---------- Install / Reinstall (auto-creates shortcuts) ----------
 install_tool() {
     header "Installing Lauda Code"
     mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
     clone_repo
 
-    if [ -f "$LAUDA_PY" ]; then
-        get_local_version > "$VERSION_FILE"
-        create_shortcuts
-        clean_unwanted
-        ok "Lauda Code installed at $INSTALL_DIR"
-    else
+    if [ ! -f "$LAUDA_PY" ]; then
         fail "lauda_code.py not found in the repository!"
+        return 1
     fi
+
+    get_local_version > "$VERSION_FILE"
+
+    # Shortcuts are ALWAYS created as part of install — no prompt, no menu option
+    create_shortcuts
+    clean_unwanted
+
+    ok "Lauda Code installed at $INSTALL_DIR"
+    return 0
 }
 
 # ---------- Run ----------
@@ -336,6 +345,10 @@ ${BOLD}Features:${NC}
  ◈ Smart fallback + token tracking
  ◈ Autopilot mode + Web UI (port 8080)
  ◈ Sandboxed file/command tools
+
+${BOLD}Usage:${NC}
+  Type ${CYAN}lauda${NC} in any terminal to launch.
+  Or run option ${CYAN}1${NC} from this menu.
 EOF
     pause
 }
@@ -362,12 +375,10 @@ EOF
     echo -e "  ${CYAN}2)${NC} 🔄 Check for Updates"
     echo -e "  ${CYAN}3)${NC} ℹ️  About"
     echo -e "  ${CYAN}4)${NC} 🔧 Reinstall / Repair"
-    echo -e "  ${CYAN}5)${NC} 🔗 Create Shortcuts"
-    echo -e "  ${CYAN}6)${NC} 🧹 Clean Unwanted Files"
-    echo -e "  ${CYAN}7)${NC} ❌ Exit"
+    echo -e "  ${CYAN}5)${NC} 🧹 Clean Unwanted Files"
+    echo -e "  ${CYAN}6)${NC} ❌ Exit"
     echo
 
-    # Require a controlling terminal to prompt; stdin may be redirected
     if ! have_tty; then
         fail "No controlling terminal available."
         echo "  Run this script directly from an interactive shell:"
@@ -376,12 +387,11 @@ EOF
     fi
 
     local choice=""
-    if ! read_tty choice "↳ Select option [1-7]: "; then
+    if ! read_tty choice "↳ Select option [1-6]: "; then
         echo
         exit 0
     fi
 
-    # Empty Enter → silently redraw
     if [[ -z "$choice" ]]; then
         return
     fi
@@ -391,9 +401,8 @@ EOF
         2) check_updates; pause ;;
         3) show_about ;;
         4) install_tool; pause ;;
-        5) create_shortcuts; pause ;;
-        6) clean_unwanted; pause ;;
-        7) exit 0 ;;
+        5) clean_unwanted; pause ;;
+        6) exit 0 ;;
         *) warn "Invalid choice: '${choice}'"; sleep 1 ;;
     esac
 }
@@ -403,11 +412,9 @@ clear 2>/dev/null || printf "\033c"
 echo -e "${BOLD}${CYAN}🚀 Lauda Code Setup${NC}"
 echo -e "${YELLOW}◈ Developed by ERROR · TG: t.me/aab_ho_ga_comeback${NC}\n"
 
-# Verify we have a terminal before doing anything interactive
 if ! have_tty; then
     fail "No controlling terminal detected."
-    echo "  This installer needs an interactive terminal to prompt you."
-    echo "  If you piped the script in, download and run it instead:"
+    echo "  Download and run instead of piping:"
     echo "    curl -fsSL <url> -o lauda.sh && bash lauda.sh"
     exit 1
 fi
@@ -415,6 +422,7 @@ fi
 check_dependencies
 clone_repo
 
+# First-time install: shortcuts are created here, automatically
 if [ ! -f "$LAUDA_PY" ]; then
     warn "First-time setup — installing Lauda Code..."
     install_tool

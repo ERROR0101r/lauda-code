@@ -17,21 +17,18 @@ BIN_DIR="$HOME/.local/bin"
 LAUDA_PY="$INSTALL_DIR/lauda_code.py"
 VERSION_FILE="$INSTALL_DIR/.version"
 CURRENT_VERSION="10.0.0"
-
+REPO_URL="https://github.com/ERROR0101r/lauda-code.git"
+VERSION_JSON_URL="https://raw.githubusercontent.com/ERROR0101r/lauda-code/main/version.json"
 DESKTOP_DIR="$HOME/Desktop"
 APPS_DIR="$HOME/.local/share/applications"
 
-# 🔁 Change these to your real GitHub URLs
-VERSION_JSON_URL="https://raw.githubusercontent.com/ERROR0101r/lauda-code/main/version.json"
-SOURCE_PY_URL="https://raw.githubusercontent.com/ERROR0101r/lauda-code/main/lauda_code.py"
-
 # ---------- Helpers ----------
-log()   { echo -e "${BLUE}[*]${NC} $1"; }
-ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-fail()  { echo -e "${RED}[✗]${NC} $1"; }
-header(){ echo -e "\n${MAGENTA}${BOLD}=== $1 ===${NC}\n"; }
-pause() { echo; read -rp "Press Enter to return to menu..." _; }
+log()   { echo -e "${BLUE}◈${NC} $1"; }
+ok()    { echo -e "${GREEN}✔${NC} $1"; }
+warn()  { echo -e "${YELLOW}⚠${NC} $1"; }
+fail()  { echo -e "${RED}✘${NC} $1"; }
+header(){ echo -e "\n${MAGENTA}${BOLD}◈ ─── $1 ─── ◈${NC}\n"; }
+pause() { echo; read -rp "↳ Press Enter to return to menu..." _; }
 has()   { command -v "$1" >/dev/null 2>&1; }
 
 detect_pkg_manager() {
@@ -51,7 +48,7 @@ check_dependencies() {
     local PKG_MGR=$(detect_pkg_manager)
     log "Package manager: $PKG_MGR"
 
-    local sys_deps=("python3|python3" "pip3|python3-pip" "curl|curl")
+    local sys_deps=("git|git" "python3|python3" "pip3|python3-pip" "curl|curl")
     local missing=()
 
     for e in "${sys_deps[@]}"; do
@@ -60,7 +57,7 @@ check_dependencies() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        read -rp "Install missing system packages now? [Y/n]: " a; a=${a:-Y}
+        read -rp "↳ Install missing system packages now? [Y/n]: " a; a=${a:-Y}
         if [[ "$a" =~ ^[Yy]$ ]]; then
             for e in "${missing[@]}"; do
                 local c="${e%%|*}"; local p="${e##*|}"
@@ -81,7 +78,7 @@ check_dependencies() {
         ok "System dependencies OK."
     fi
 
-    log "Checking Python packages (requests, rich)..."
+    log "Checking Python packages..."
     python3 -m pip install --quiet --upgrade pip 2>/dev/null || true
 
     for pkg in requests rich; do
@@ -97,45 +94,64 @@ check_dependencies() {
     ok "Dependency check complete."
 }
 
-# ---------- Get current version (local) ----------
-get_local_version() {
-    if [ -f "$VERSION_FILE" ]; then cat "$VERSION_FILE"; else echo "0.0.0"; fi
+# ---------- Clone Repo ----------
+clone_repo() {
+    header "Cloning Repository"
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        ok "Repository already exists."
+        return 0
+    fi
+    
+    if [ -d "$INSTALL_DIR" ]; then
+        warn "Directory exists but is not a git repo. Removing..."
+        rm -rf "$INSTALL_DIR"
+    fi
+
+    log "Cloning from GitHub..."
+    if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
+        ok "Repository cloned successfully."
+    else
+        fail "Failed to clone repository. Check your internet or Git."
+        exit 1
+    fi
 }
 
-# ---------- Clean unwanted files ----------
+# ---------- Get Current Version ----------
+get_local_version() {
+    if [ -f "$VERSION_FILE" ]; then cat "$VERSION_FILE"; 
+    elif [ -f "$INSTALL_DIR/version.json" ]; then 
+        grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$INSTALL_DIR/version.json" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/'
+    else echo "0.0.0"; fi
+}
+
+# ---------- Clean Unwanted Files ----------
 clean_unwanted() {
     header "Cleaning Unwanted Files"
     local cleaned=0
-
-    # Extra files that get pulled/downloaded but aren't needed at runtime
     local patterns=(
-        "version.json"
-        "README.md" "readme.md" "Readme.md"
+        "version.json" "README.md" "readme.md" "Readme.md"
         "LICENSE" "LICENSE.md" "License" "license" "license.md"
-        "CHANGELOG.md" "changelog.md"
-        "CONTRIBUTING.md" "contributing.md"
-        "CODE_OF_CONDUCT.md"
-        ".gitignore" ".gitattributes" ".editorconfig"
+        "CHANGELOG.md" "changelog.md" "CONTRIBUTING.md" "contributing.md"
+        "CODE_OF_CONDUCT.md" ".gitignore" ".gitattributes" ".editorconfig"
         "*.bak" "*.tmp" "*.log" "*.swp" "*~"
         "requirements.txt" "package.json" "package-lock.json"
         "setup.py" "setup.cfg" "pyproject.toml"
         "Dockerfile" "docker-compose.yml" ".dockerignore"
         "Makefile" ".env.example" "*.sample"
+        "Screenshot_*.png" "*.jpg" "*.jpeg" # Removes screenshots to save space
     )
 
-    # Only touch the install dir (never user's home)
     for pat in "${patterns[@]}"; do
         while IFS= read -r -d '' f; do
             if rm -rf "$f" 2>/dev/null; then
-                ok "Removed: $f"
+                ok "Removed: $(basename "$f")"
                 cleaned=$((cleaned+1))
             fi
         done < <(find "$INSTALL_DIR" -maxdepth 2 -name "$pat" -print0 2>/dev/null)
     done
 
-    # Remove python caches
     while IFS= read -r -d '' d; do
-        rm -rf "$d" 2>/dev/null && ok "Removed cache: $d" && cleaned=$((cleaned+1))
+        rm -rf "$d" 2>/dev/null && ok "Removed cache: $(basename "$d")" && cleaned=$((cleaned+1))
     done < <(find "$INSTALL_DIR" -type d \( -name "__pycache__" -o -name ".pytest_cache" \) -print0 2>/dev/null)
 
     if [ "$cleaned" -eq 0 ]; then
@@ -145,11 +161,11 @@ clean_unwanted() {
     fi
 }
 
-# ---------- Create shortcuts ----------
+# ---------- Create Shortcuts ----------
 create_shortcuts() {
     header "Creating Shortcuts"
 
-    # ensure launcher exists
+    mkdir -p "$BIN_DIR"
     cat > "$BIN_DIR/lauda" <<EOF
 #!/bin/bash
 exec python3 "$LAUDA_PY" "\$@"
@@ -157,11 +173,9 @@ EOF
     chmod +x "$BIN_DIR/lauda"
     ok "Terminal command: lauda"
 
-    # ---------- .desktop entry (Linux GUI shortcut) ----------
-    if has update-desktop-database || [ -d "$APPS_DIR" ] || mkdir -p "$APPS_DIR" 2>/dev/null; then
-        mkdir -p "$APPS_DIR"
-        local desktop_file="$APPS_DIR/lauda-code.desktop"
-        cat > "$desktop_file" <<EOF
+    mkdir -p "$APPS_DIR"
+    local desktop_file="$APPS_DIR/lauda-code.desktop"
+    cat > "$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Lauda Code
@@ -172,30 +186,23 @@ Terminal=true
 Categories=Development;Utility;
 Keywords=AI;Code;Lauda;
 EOF
-        chmod +x "$desktop_file"
-        ok "App menu shortcut: $desktop_file"
+    chmod +x "$desktop_file"
+    ok "App menu shortcut created."
 
-        # desktop icon (if Desktop folder exists)
-        if [ -d "$DESKTOP_DIR" ]; then
-            cp "$desktop_file" "$DESKTOP_DIR/lauda-code.desktop"
-            chmod +x "$DESKTOP_DIR/lauda-code.desktop"
-            # GNOME needs "trust" flag
-            gio set "$DESKTOP_DIR/lauda-code.desktop" metadata::trusted true 2>/dev/null || true
-            ok "Desktop shortcut: $DESKTOP_DIR/lauda-code.desktop"
-        fi
-
-        # refresh menu
-        has update-desktop-database && update-desktop-database "$APPS_DIR" 2>/dev/null || true
+    if [ -d "$DESKTOP_DIR" ]; then
+        cp "$desktop_file" "$DESKTOP_DIR/lauda-code.desktop"
+        chmod +x "$DESKTOP_DIR/lauda-code.desktop"
+        gio set "$DESKTOP_DIR/lauda-code.desktop" metadata::trusted true 2>/dev/null || true
+        ok "Desktop shortcut created."
     fi
 
-    # ---------- PATH hint ----------
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         warn "Add to PATH (bash/zsh):"
         echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
     fi
 }
 
-# ---------- Check updates ----------
+# ---------- Check Updates ----------
 check_updates() {
     header "Check for Updates"
     local local_v=$(get_local_version)
@@ -217,7 +224,7 @@ check_updates() {
     if [ -z "$remote_v" ]; then fail "Invalid version.json format."; return 1; fi
 
     log "Latest version:   $remote_v"
-    if [ -n "$changelog" ]; then echo -e "  ${CYAN}Changelog:${NC} $changelog"; fi
+    if [ -n "$changelog" ]; then echo -e "  ${CYAN}◈ Changelog:${NC} $changelog"; fi
 
     if [ "$remote_v" = "$local_v" ]; then
         ok "You are up to date."
@@ -226,58 +233,48 @@ check_updates() {
 
     echo
     warn "New version available: $local_v → $remote_v"
-    read -rp "Update now? [Y/n]: " a; a=${a:-Y}
+    read -rp "↳ Update now? [Y/n]: " a; a=${a:-Y}
     if [[ "$a" =~ ^[Yy]$ ]]; then
         do_update "$remote_v"
     fi
 }
 
-# ---------- Perform update ----------
+# ---------- Perform Update ----------
 do_update() {
     local new_v="$1"
     header "Updating Lauda Code"
-    mkdir -p "$INSTALL_DIR"
-
-    log "Downloading latest lauda_code.py..."
-    if curl -fsSL "$SOURCE_PY_URL" -o "$LAUDA_PY.tmp"; then
-        mv "$LAUDA_PY.tmp" "$LAUDA_PY"
+    
+    log "Pulling latest changes from Git..."
+    if git -C "$INSTALL_DIR" pull origin main 2>/dev/null; then
         echo "$new_v" > "$VERSION_FILE"
         ok "Updated to $new_v"
     else
-        fail "Download failed."
-        rm -f "$LAUDA_PY.tmp"
+        fail "Git pull failed. Try reinstalling."
     fi
 }
 
-# ---------- First-time install ----------
+# ---------- Install / Reinstall ----------
 install_tool() {
     header "Installing Lauda Code"
     mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
+    clone_repo
+    
     if [ -f "$LAUDA_PY" ]; then
-        warn "Already installed. Reinstalling..."
-    fi
-
-    log "Downloading lauda_code.py from GitHub..."
-    if curl -fsSL "$SOURCE_PY_URL" -o "$LAUDA_PY"; then
-        ok "Downloaded lauda_code.py"
+        echo "$(get_local_version)" > "$VERSION_FILE"
+        create_shortcuts
+        clean_unwanted
+        ok "Lauda Code installed at $INSTALL_DIR"
     else
-        fail "Download failed. Place lauda_code.py manually at: $LAUDA_PY"
-        return 1
+        fail "lauda_code.py not found in the repository!"
     fi
-    echo "$CURRENT_VERSION" > "$VERSION_FILE"
-
-    create_shortcuts
-    clean_unwanted
-
-    ok "Lauda Code installed at $INSTALL_DIR"
 }
 
 # ---------- Run ----------
 run_lauda() {
     header "Run Lauda Code"
     if [ ! -f "$LAUDA_PY" ]; then
-        fail "Lauda Code not installed. Choose Install/Update first."
+        fail "Lauda Code not installed. Choose Install/Reinstall first."
         pause; return
     fi
     log "Starting Lauda Code..."
@@ -298,15 +295,15 @@ ${BOLD}Telegram:${NC}    https://t.me/aab_ho_ga_comeback
 ${BOLD}GitHub:${NC}      ERROR0101r
 
 ${BOLD}Features:${NC}
- • Multi-provider (OpenRouter, Groq, Cerebras, Mistral, Gemini)
- • Smart fallback + token tracking
- • Autopilot mode + Web UI (port 8080)
- • Sandboxed file/command tools
+ ◈ Multi-provider (OpenRouter, Groq, Cerebras, Mistral, Gemini)
+ ◈ Smart fallback + token tracking
+ ◈ Autopilot mode + Web UI (port 8080)
+ ◈ Sandboxed file/command tools
 EOF
     pause
 }
 
-# ---------- Ensure installed ----------
+# ---------- Ensure Installed ----------
 ensure_installed() {
     if [ ! -f "$LAUDA_PY" ]; then
         warn "Lauda Code not found — installing first..."
@@ -319,20 +316,20 @@ main_menu() {
     clear 2>/dev/null || printf "\033c"
     echo -e "${MAGENTA}${BOLD}"
     cat <<'EOF'
-  ┌─────────────────────────────────────┐
-  │        LAUDA CODE  •  LAUNCHER      │
-  └─────────────────────────────────────┘
+  ╔═════════════════════════════════════╗
+  ║        LAUDA CODE • LAUNCHER        ║
+  ╚═════════════════════════════════════╝
 EOF
     echo -e "${NC}"
-    echo -e "  ${CYAN}1)${NC} Run Lauda Code"
-    echo -e "  ${CYAN}2)${NC} Check for Updates"
-    echo -e "  ${CYAN}3)${NC} About"
-    echo -e "  ${CYAN}4)${NC} Reinstall / Repair"
-    echo -e "  ${CYAN}5)${NC} Create Shortcuts"
-    echo -e "  ${CYAN}6)${NC} Clean Unwanted Files"
-    echo -e "  ${CYAN}7)${NC} Exit"
+    echo -e "  ${CYAN}1)${NC} 🚀 Run Lauda Code"
+    echo -e "  ${CYAN}2)${NC} 🔄 Check for Updates"
+    echo -e "  ${CYAN}3)${NC} ℹ️  About"
+    echo -e "  ${CYAN}4)${NC} 🔧 Reinstall / Repair"
+    echo -e "  ${CYAN}5)${NC} 🔗 Create Shortcuts"
+    echo -e "  ${CYAN}6)${NC} 🧹 Clean Unwanted Files"
+    echo -e "  ${CYAN}7)${NC} ❌ Exit"
     echo
-    read -rp "Select option [1-7]: " choice
+    read -rp "↳ Select option [1-7]: " choice
     case "$choice" in
         1) ensure_installed; run_lauda ;;
         2) check_updates; pause ;;
@@ -348,11 +345,11 @@ EOF
 # ---------- Entry ----------
 clear 2>/dev/null || printf "\033c"
 echo -e "${BOLD}${CYAN}🚀 Lauda Code Setup${NC}"
-echo -e "${YELLOW}Developed by ERROR · TG: t.me/aab_ho_ga_comeback${NC}\n"
+echo -e "${YELLOW}◈ Developed by ERROR · TG: t.me/aab_ho_ga_comeback${NC}\n"
 
 check_dependencies
+clone_repo
 
-# Auto-install on first run
 if [ ! -f "$LAUDA_PY" ]; then
     warn "First-time setup — installing Lauda Code..."
     install_tool

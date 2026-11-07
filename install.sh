@@ -29,13 +29,13 @@ fail()  { echo -e "${RED}✘${NC} $1"; }
 header(){ echo -e "\n${MAGENTA}${BOLD}◈ ─── $1 ─── ◈${NC}\n"; }
 has()   { command -v "$1" >/dev/null 2>&1; }
 
-# Robust pause: handles EOF and stray input without breaking the menu loop
-pause() {
-    echo
-    read -rp "↳ Press Enter to return to menu..." _ || true
-}
+# ---------- Interactive TTY helpers ----------
+# A controlling terminal is required for prompts, even if stdin is redirected
+# (pipes, /dev/null, Termux widget launchers, etc.). We always read from /dev/tty.
 
-# Sanitize any input: strip CR, LF, tabs, spaces, and null bytes
+have_tty() { { : </dev/tty; } 2>/dev/null; }
+
+# Sanitize a string: strip CR, LF, tab, space, NUL
 sanitize() {
     local s="$1"
     s="${s//$'\r'/}"
@@ -44,6 +44,24 @@ sanitize() {
     s="${s// /}"
     s="${s//$'\0'/}"
     printf '%s' "$s"
+}
+
+# read_tty VAR "prompt" — reads one line from /dev/tty, sanitized into VAR.
+# Returns 1 on EOF/failure.
+read_tty() {
+    local __var="$1" __prompt="$2" __line=""
+    if ! IFS= read -rp "$__prompt" __line </dev/tty; then
+        return 1
+    fi
+    __line=$(sanitize "$__line")
+    printf -v "$__var" '%s' "$__line"
+    return 0
+}
+
+# pause: wait for Enter without ever breaking the menu loop
+pause() {
+    echo
+    read_tty _ "↳ Press Enter to return to menu..." || true
 }
 
 detect_pkg_manager() {
@@ -72,9 +90,9 @@ check_dependencies() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        local a
-        read -rp "↳ Install missing system packages now? [Y/n]: " a || a=""
-        a=$(sanitize "$a"); a=${a:-Y}
+        local a=""
+        read_tty a "↳ Install missing system packages now? [Y/n]: " || a=""
+        a=${a:-Y}
         if [[ "$a" =~ ^[Yy]$ ]]; then
             for e in "${missing[@]}"; do
                 local c="${e%%|*}"; local p="${e##*|}"
@@ -118,7 +136,7 @@ clone_repo() {
         ok "Repository already exists."
         return 0
     fi
-    
+
     if [ -d "$INSTALL_DIR" ]; then
         warn "Directory exists but is not a git repo. Removing..."
         rm -rf "$INSTALL_DIR"
@@ -135,8 +153,8 @@ clone_repo() {
 
 # ---------- Get Current Version ----------
 get_local_version() {
-    if [ -f "$VERSION_FILE" ]; then cat "$VERSION_FILE"; 
-    elif [ -f "$INSTALL_DIR/version.json" ]; then 
+    if [ -f "$VERSION_FILE" ]; then cat "$VERSION_FILE"
+    elif [ -f "$INSTALL_DIR/version.json" ]; then
         grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$INSTALL_DIR/version.json" | head -n1 | sed -E 's/.*"([^"]+)"$/\1/'
     else echo "0.0.0"; fi
 }
@@ -250,9 +268,9 @@ check_updates() {
 
     echo
     warn "New version available: $local_v → $remote_v"
-    local a
-    read -rp "↳ Update now? [Y/n]: " a || a=""
-    a=$(sanitize "$a"); a=${a:-Y}
+    local a=""
+    read_tty a "↳ Update now? [Y/n]: " || a=""
+    a=${a:-Y}
     if [[ "$a" =~ ^[Yy]$ ]]; then
         do_update "$remote_v"
     fi
@@ -262,7 +280,7 @@ check_updates() {
 do_update() {
     local new_v="$1"
     header "Updating Lauda Code"
-    
+
     log "Pulling latest changes from Git..."
     if git -C "$INSTALL_DIR" pull origin main 2>/dev/null; then
         echo "$new_v" > "$VERSION_FILE"
@@ -278,7 +296,7 @@ install_tool() {
     mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
     clone_repo
-    
+
     if [ -f "$LAUDA_PY" ]; then
         get_local_version > "$VERSION_FILE"
         create_shortcuts
@@ -349,26 +367,21 @@ EOF
     echo -e "  ${CYAN}7)${NC} ❌ Exit"
     echo
 
-    # ---- Robust input handling ----
-    local choice=""
-
-    # If not running on a TTY, exit cleanly (prevents infinite loop on piped input)
-    if [ ! -t 0 ]; then
-        fail "No TTY detected. Exiting."
+    # Require a controlling terminal to prompt; stdin may be redirected
+    if ! have_tty; then
+        fail "No controlling terminal available."
+        echo "  Run this script directly from an interactive shell:"
+        echo "    bash lauda.sh"
         exit 1
     fi
 
-    # Read with plain -r (no -e; readline is unreliable in Termux and non-bash shells)
-    if ! IFS= read -rp "↳ Select option [1-7]: " choice; then
-        # EOF / Ctrl-D — exit gracefully instead of looping forever
+    local choice=""
+    if ! read_tty choice "↳ Select option [1-7]: "; then
         echo
         exit 0
     fi
 
-    # Sanitize: strip CR, LF, tabs, spaces that Termux / paste / line-buffering leave behind
-    choice=$(sanitize "$choice")
-
-    # Empty Enter → just redraw the menu silently
+    # Empty Enter → silently redraw
     if [[ -z "$choice" ]]; then
         return
     fi
@@ -389,6 +402,15 @@ EOF
 clear 2>/dev/null || printf "\033c"
 echo -e "${BOLD}${CYAN}🚀 Lauda Code Setup${NC}"
 echo -e "${YELLOW}◈ Developed by ERROR · TG: t.me/aab_ho_ga_comeback${NC}\n"
+
+# Verify we have a terminal before doing anything interactive
+if ! have_tty; then
+    fail "No controlling terminal detected."
+    echo "  This installer needs an interactive terminal to prompt you."
+    echo "  If you piped the script in, download and run it instead:"
+    echo "    curl -fsSL <url> -o lauda.sh && bash lauda.sh"
+    exit 1
+fi
 
 check_dependencies
 clone_repo

@@ -27,8 +27,24 @@ ok()    { echo -e "${GREEN}✔${NC} $1"; }
 warn()  { echo -e "${YELLOW}⚠${NC} $1"; }
 fail()  { echo -e "${RED}✘${NC} $1"; }
 header(){ echo -e "\n${MAGENTA}${BOLD}◈ ─── $1 ─── ◈${NC}\n"; }
-pause() { echo; read -rp "↳ Press Enter to return to menu..." _; }
 has()   { command -v "$1" >/dev/null 2>&1; }
+
+# Robust pause: handles EOF and stray input without breaking the menu loop
+pause() {
+    echo
+    read -rp "↳ Press Enter to return to menu..." _ || true
+}
+
+# Sanitize any input: strip CR, LF, tabs, spaces, and null bytes
+sanitize() {
+    local s="$1"
+    s="${s//$'\r'/}"
+    s="${s//$'\n'/}"
+    s="${s//$'\t'/}"
+    s="${s// /}"
+    s="${s//$'\0'/}"
+    printf '%s' "$s"
+}
 
 detect_pkg_manager() {
     if has apt-get; then echo apt
@@ -56,7 +72,9 @@ check_dependencies() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        read -rp "↳ Install missing system packages now? [Y/n]: " a; a=${a:-Y}
+        local a
+        read -rp "↳ Install missing system packages now? [Y/n]: " a || a=""
+        a=$(sanitize "$a"); a=${a:-Y}
         if [[ "$a" =~ ^[Yy]$ ]]; then
             for e in "${missing[@]}"; do
                 local c="${e%%|*}"; local p="${e##*|}"
@@ -232,7 +250,9 @@ check_updates() {
 
     echo
     warn "New version available: $local_v → $remote_v"
-    read -rp "↳ Update now? [Y/n]: " a; a=${a:-Y}
+    local a
+    read -rp "↳ Update now? [Y/n]: " a || a=""
+    a=$(sanitize "$a"); a=${a:-Y}
     if [[ "$a" =~ ^[Yy]$ ]]; then
         do_update "$remote_v"
     fi
@@ -260,7 +280,7 @@ install_tool() {
     clone_repo
     
     if [ -f "$LAUDA_PY" ]; then
-        echo "$(get_local_version)" > "$VERSION_FILE"
+        get_local_version > "$VERSION_FILE"
         create_shortcuts
         clean_unwanted
         ok "Lauda Code installed at $INSTALL_DIR"
@@ -328,11 +348,27 @@ EOF
     echo -e "  ${CYAN}6)${NC} 🧹 Clean Unwanted Files"
     echo -e "  ${CYAN}7)${NC} ❌ Exit"
     echo
-    
-    # Fixed input handling
-    read -erp "↳ Select option [1-7]: " choice
-    
-    # If user just presses Enter without typing, show menu again silently
+
+    # ---- Robust input handling ----
+    local choice=""
+
+    # If not running on a TTY, exit cleanly (prevents infinite loop on piped input)
+    if [ ! -t 0 ]; then
+        fail "No TTY detected. Exiting."
+        exit 1
+    fi
+
+    # Read with plain -r (no -e; readline is unreliable in Termux and non-bash shells)
+    if ! IFS= read -rp "↳ Select option [1-7]: " choice; then
+        # EOF / Ctrl-D — exit gracefully instead of looping forever
+        echo
+        exit 0
+    fi
+
+    # Sanitize: strip CR, LF, tabs, spaces that Termux / paste / line-buffering leave behind
+    choice=$(sanitize "$choice")
+
+    # Empty Enter → just redraw the menu silently
     if [[ -z "$choice" ]]; then
         return
     fi
@@ -345,7 +381,7 @@ EOF
         5) create_shortcuts; pause ;;
         6) clean_unwanted; pause ;;
         7) exit 0 ;;
-        *) warn "Invalid choice"; sleep 1 ;;
+        *) warn "Invalid choice: '${choice}'"; sleep 1 ;;
     esac
 }
 

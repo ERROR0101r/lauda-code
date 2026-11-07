@@ -16,7 +16,6 @@ INSTALL_DIR="$HOME/.lauda-code"
 BIN_DIR="$HOME/.local/bin"
 LAUDA_PY="$INSTALL_DIR/lauda_code.py"
 VERSION_FILE="$INSTALL_DIR/.version"
-CURRENT_VERSION="10.0.0"
 REPO_URL="https://github.com/ERROR0101r/lauda-code.git"
 VERSION_JSON_URL="https://raw.githubusercontent.com/ERROR0101r/lauda-code/main/version.json"
 DESKTOP_DIR="$HOME/Desktop"
@@ -138,7 +137,7 @@ clean_unwanted() {
         "setup.py" "setup.cfg" "pyproject.toml"
         "Dockerfile" "docker-compose.yml" ".dockerignore"
         "Makefile" ".env.example" "*.sample"
-        "Screenshot_*.png" "*.jpg" "*.jpeg" # Removes screenshots to save space
+        "Screenshot_*.png" "*.jpg" "*.jpeg"
     )
 
     for pat in "${patterns[@]}"; do
@@ -329,7 +328,15 @@ EOF
     echo -e "  ${CYAN}6)${NC} 🧹 Clean Unwanted Files"
     echo -e "  ${CYAN}7)${NC} ❌ Exit"
     echo
-    read -rp "↳ Select option [1-7]: " choice
+    
+    # Fixed input handling
+    read -erp "↳ Select option [1-7]: " choice
+    
+    # If user just presses Enter without typing, show menu again silently
+    if [[ -z "$choice" ]]; then
+        return
+    fi
+
     case "$choice" in
         1) ensure_installed; run_lauda ;;
         2) check_updates; pause ;;
